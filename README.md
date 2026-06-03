@@ -50,9 +50,19 @@ sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plug
 ### execute the qelect
 ```
 # download the zip file and unzip the folder under MPS
-git clone --depth 1 https://github.com/serendipity-crypto/Qelect.git qelect
+git clone --depth 1 https://github.com/haofeiliang/Qelect.git qelect
 cd qelect
-sudo docker build --no-cache -t qelect_project .
+
+# build without cache
+sudo docker build --network host --no-cache -t qelect_project .
+
+# build with proxy
+sudo docker build --network host \
+      --build-arg HTTP_PROXY=http://localhost:10808 \
+      --build-arg HTTPS_PROXY=http://localhost:10808 \
+      -t qelect_project .
+
+# run
 sudo docker run qelect_project
 ```
 

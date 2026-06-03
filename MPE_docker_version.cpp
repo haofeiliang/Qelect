@@ -9,6 +9,7 @@
 #include <NTL/BasicThreadPool.h>
 #include <NTL/ZZ.h>
 #include <thread>
+#include <cstdlib>
 
 using namespace seal;
 using namespace std;
@@ -26,6 +27,9 @@ ability between public keys and final winner tokens).
 int main() {
 
     int numcores = 1;
+    const char* env_threads = getenv("NUM_THREADS");
+    if (env_threads) numcores = atoi(env_threads);
+    if (numcores < 1) numcores = 1;
     NTL::SetNumThreads(numcores);
   
     // int group_size = 1024;
@@ -161,7 +165,9 @@ int main() {
 
     for (int i = 0 ; i < (int) group_size_list.size(); i++) {
         int group_size = group_size_list[i];
-        
+
+        if (numcores > group_size) continue;
+
         total_time = 0;
     
         // prepare ring_dim different tokens, each is of size ring_dim, in plaintext form
@@ -273,8 +279,8 @@ int main() {
     
     
         time_start = chrono::high_resolution_clock::now();
-        vector<vector<Ciphertext>> expanded_leaf(numcores, vector<Ciphertext>(group_size/numcores));  
-        vector<Ciphertext> token_subsum(numcores);                                             
+        vector<vector<Ciphertext>> expanded_leaf(numcores, vector<Ciphertext>(group_size/numcores));
+        vector<Ciphertext> token_subsum(numcores);
         NTL_EXEC_RANGE(numcores, first, last);
         for (int i = first; i < last; i++) {
             expanded_leaf[i] = expand(context_expand, parms_expand, expanded_subtree_roots[i], ring_dim,

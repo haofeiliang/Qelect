@@ -1,4 +1,5 @@
 FROM ubuntu:22.04
+
 # Install dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -6,29 +7,42 @@ RUN apt-get update && apt-get install -y \
     cmake \
     libgmp3-dev \
     libntl-dev \
-    graphviz \
-    git
+    git \
+ && rm -rf /var/lib/apt/lists/*
+
+# Proxy settings (pass via --build-arg, skipped if empty)
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+RUN if [ -n "$HTTP_PROXY" ]; then git config --global http.proxy "$HTTP_PROXY"; fi \
+ && if [ -n "$HTTPS_PROXY" ]; then git config --global https.proxy "$HTTPS_PROXY"; fi
+
 # Set working directory
 WORKDIR /home/ubuntu/qelect
 
-RUN git config --global http.proxy "http://10.210.3.114:20172"
-RUN git config --global https.proxy "http://10.210.3.114:20172"
-
-# Clone the qelect repository
-RUN git clone https://github.com/serendipity-crypto/Qelect /home/ubuntu/qelect
 # Install PALISADE library
-RUN git clone -b v1.11.9 https://gitlab.com/palisade/palisade-release \
+RUN git clone --depth 1 -b v1.11.9 https://gitlab.com/palisade/palisade-release \
     && cd palisade-release && mkdir build && cd build \
     && cmake .. -DCMAKE_INSTALL_PREFIX=/home/ubuntu/qelect/build \
-    && make -j && make install
+    && make -j$(nproc) && make install
+
+# Intel HEXL support (disable with --build-arg USE_INTEL_HEXL=OFF)
+ARG USE_INTEL_HEXL=ON
+
 # Install SEAL library
-RUN git clone https://github.com/wyunhao/SEAL \
-    && cd SEAL && cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/home/ubuntu/qelect/build -DSEAL_USE_INTEL_HEXL=ON \
-    && cmake --build build -- -j && cmake --install build
+RUN git clone --depth 1 https://github.com/wyunhao/SEAL \
+    && cd SEAL && cmake -S . -B build \
+        -DCMAKE_INSTALL_PREFIX=/home/ubuntu/qelect/build \
+        -DSEAL_USE_INTEL_HEXL=$USE_INTEL_HEXL \
+    && cmake --build build -- -j$(nproc) && cmake --install build
+
+# Copy the qelect repository
+COPY . /home/ubuntu/qelect
+
 # Build the qelect project
-RUN cd /home/ubuntu/qelect && cd build \
-    && mkdir ../data && mkdir ../data/perm \
+RUN mkdir -p /home/ubuntu/qelect/build /home/ubuntu/qelect/data/perm \
+    && cd /home/ubuntu/qelect/build \
     && cmake .. -DCMAKE_PREFIX_PATH=/home/ubuntu/qelect/build \
-    && make -j
+    && make -j$(nproc)
+
 # Set entrypoint
 ENTRYPOINT ["/home/ubuntu/qelect/build/mps"]
