@@ -4,6 +4,7 @@
 #include "util.h"
 #include "seal/seal.h"
 #include "seal/util/iterator.h"
+#include <algorithm>
 #include <numeric>
 #include <stdio.h>
 #include <NTL/BasicThreadPool.h>
@@ -24,12 +25,39 @@ Each leader is selected by oblivious expanding the monomial in each chunk and mu
 ability between public keys and final winner tokens). 
 */
 
-int main() {
+int main(int argc, char* argv[]) {
 
     int numcores = 1;
     const char* env_threads = getenv("NUM_THREADS");
     if (env_threads) numcores = atoi(env_threads);
     if (numcores < 1) numcores = 1;
+
+    vector<int> group_size_list;
+    if (argc == 1) {
+        for (int group_size = 2; group_size <= 2048; group_size *= 2) {
+            if (group_size > numcores) group_size_list.push_back(group_size);
+        }
+    } else {
+        for (int i = 1; i < argc; ++i) {
+            char* end;
+            const long group_size = strtol(argv[i], &end, 10);
+            if (end == argv[i] || *end != '\0' || group_size < 2 || group_size > 2048 ||
+                    (group_size & (group_size - 1)) != 0 || group_size <= numcores) {
+                cerr << "Invalid group size " << argv[i]
+                     << ". Expected a power of two between 2 and 2048 greater than NUM_THREADS.\n";
+                return EXIT_FAILURE;
+            }
+            if (find(group_size_list.begin(), group_size_list.end(), group_size) != group_size_list.end()) {
+                cerr << "Repeated group size " << group_size << '\n';
+                return EXIT_FAILURE;
+            }
+            group_size_list.push_back(static_cast<int>(group_size));
+        }
+    }
+    if (group_size_list.empty()) {
+        cerr << "No supported group size is greater than NUM_THREADS.\n";
+        return EXIT_FAILURE;
+    }
     NTL::SetNumThreads(numcores);
   
     // int group_size = 1024;
@@ -161,14 +189,9 @@ int main() {
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-	vector<int> group_size_list = {2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048};
-
-    for (int i = 0 ; i < (int) group_size_list.size(); i++) {
-        int group_size = group_size_list[i];
-
-        if (numcores > group_size) continue;
-
+    for (int group_size : group_size_list) {
         total_time = 0;
+        preprocess_time = 0;
     
         // prepare ring_dim different tokens, each is of size ring_dim, in plaintext form
         // for simplicity, use just one token
