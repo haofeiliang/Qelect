@@ -6,9 +6,9 @@ CPU cores, saves results to timestamped files, then analyzes and outputs CSV.
 
 ## Design constraints & assumptions
 
-### numcores ≤ group_size (enforced in MPE_docker_version.cpp)
-If NUM_THREADS > group_size, that group_size is SKIPPED (continue). Division
-by zero prevention. For 16 threads, group_size 2/4/8 are skipped.
+### group_size > numcores (enforced in MPE_docker_version.cpp)
+The default sweep skips group sizes at or below NUM_THREADS. For 16 threads,
+the first measured group size is 32.
 
 ### Core pinning — contiguous allocation only
 Each docker container gets ``--cpuset-cpus=<start>-<end>``, a single

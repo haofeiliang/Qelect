@@ -79,6 +79,21 @@ Total time             : 5921790 us.
 ```
 The local computation time for a single party, with party size = 1024, is ~5.9 seconds.
 
+## Reproduce the Release benchmark build
+
+`Dockerfile.bench` pins the PALISADE, SEAL and HEXL revisions used by the benchmark and builds in Release mode.
+
+```sh
+docker build --network host -f Dockerfile.bench -t qelect_project .
+docker run --rm -e NUM_THREADS=2 qelect_project 8
+```
+
+Pass one or more powers of two between 2 and 2048 to select group sizes. Each group size must be strictly greater than `NUM_THREADS`. With no group arguments, the executable sweeps all eligible sizes. The existing runner can also repeat the sweep for each thread count.
+
+```sh
+python3 benchmark.py -t 1,2,4 -r 3 -p 1
+```
+
 ## The instructions to run the project via cmake:
 ```
 # If permission required, please add sudo before the commands as needed

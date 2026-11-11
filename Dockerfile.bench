@@ -1,0 +1,44 @@
+FROM ubuntu:22.04@sha256:8a2321a92b438238f93b4346fff61bc4259c99fdd4d9b52ee86f153fee0c344f
+
+ARG BUILD_JOBS=4
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      autoconf build-essential ca-certificates cmake git libgmp-dev libntl-dev time \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /home/ubuntu/qelect
+
+# Keep the upstream arithmetic dependencies and build only the libraries.
+RUN git clone --depth 1 --branch v1.11.9 https://gitlab.com/palisade/palisade-release.git /tmp/palisade \
+    && test "$(git -C /tmp/palisade rev-parse HEAD)" = 3d1f9a3f9fd389df1f8f27f286511f4f5871258b \
+    && git -C /tmp/palisade submodule update --init --depth 1 third-party/cereal \
+    && cmake -S /tmp/palisade -B /tmp/palisade/build \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/home/ubuntu/qelect/build \
+        -DGIT_SUBMOD_AUTO=OFF -DBUILD_UNITTESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+    && cmake --build /tmp/palisade/build --parallel "$BUILD_JOBS" \
+    && cmake --install /tmp/palisade/build \
+    && rm -rf /tmp/palisade
+
+# This SEAL revision fetches HEXL 1.2.5 at f95acf1507b246946a34cda446f3a028fafb1c4b.
+RUN git init --quiet /tmp/seal \
+    && git -C /tmp/seal fetch --depth 1 https://github.com/wyunhao/SEAL d0185f278532b8cb21f463e138d7aa2880e2f7df \
+    && git -C /tmp/seal checkout --quiet FETCH_HEAD \
+    && cmake -S /tmp/seal -B /tmp/seal/build \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/home/ubuntu/qelect/build \
+        -DSEAL_USE_INTEL_HEXL=ON \
+    && cmake --build /tmp/seal/build --parallel "$BUILD_JOBS" \
+    && cmake --install /tmp/seal/build \
+    && rm -rf /tmp/seal
+
+COPY . /home/ubuntu/qelect
+RUN mkdir -p data/perm \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/home/ubuntu/qelect/build \
+    && cmake --build build --parallel "$BUILD_JOBS" \
+    && c++ --version | head -n 1
+
+LABEL ssle.qelect.palisade="3d1f9a3f9fd389df1f8f27f286511f4f5871258b" \
+      ssle.qelect.seal="d0185f278532b8cb21f463e138d7aa2880e2f7df" \
+      ssle.qelect.hexl="f95acf1507b246946a34cda446f3a028fafb1c4b" \
+      ssle.qelect.build-type="Release"
+ENV OMP_NUM_THREADS=1
+ENTRYPOINT ["/home/ubuntu/qelect/build/mps"]

@@ -640,7 +640,7 @@ inline vector<Ciphertext> subExpand(const SecretKey& sk, const SEALContext& cont
     for (int i = 0; i < logFirst; i++) {
         vector<Ciphertext> newtemp(temp.size() << 1);
         int index_raw = (m << 1) - (1 << i);
-        int index = (index_raw * galois_elts[i]) % (m << 1);
+        uint32_t index = (static_cast<uint64_t>(index_raw) * galois_elts[i]) % (m << 1);
 
         for (uint32_t a = 0; a < temp.size(); a++) {
 
@@ -649,16 +649,15 @@ inline vector<Ciphertext> subExpand(const SecretKey& sk, const SEALContext& cont
             multiply_power_of_X(enc_param, temp[a], tempctxt_shifted, index_raw);
             multiply_power_of_X(enc_param, tempctxt_rotated, tempctxt_rotatedshifted, index);
             evaluator.add(tempctxt_shifted, tempctxt_rotatedshifted, newtemp[a + temp.size()]);
+            // Let later children reuse this parent's buffer in the SEAL pool.
+            temp[a].release();
         }
 
-        temp = newtemp;
+        temp.swap(newtemp);
     }
 
-    vector<Ciphertext>::const_iterator first = temp.begin();
-    vector<Ciphertext>::const_iterator last = temp.begin() + first_expansion_size;
-    vector<Ciphertext> newVec(first, last);
-
-    return newVec;
+    temp.resize(first_expansion_size);
+    return temp;
 }
 
 inline vector<Ciphertext> expand(const SEALContext& context, EncryptionParameters& enc_param, const Ciphertext &encrypted,
@@ -1024,8 +1023,8 @@ Ciphertext slotToCoeff_WOPrepreocess(const SEALContext& context, Ciphertext& inp
     Evaluator evaluator(context);
     BatchEncoder batch_encoder(context);
 
-    chrono::high_resolution_clock::time_point time_start, time_end, s, e , total_s, total_e;
-    uint64_t total_U = 0, multi_total = 0, total_u_core = 0, total = 0;
+    chrono::high_resolution_clock::time_point time_start, time_end;
+    uint64_t total_U = 0, total = 0;
 
     time_start = chrono::high_resolution_clock::now();
     vector<Ciphertext> input_sqrt_list(2*sq_rt);
@@ -1056,19 +1055,23 @@ Ciphertext slotToCoeff_WOPrepreocess(const SEALContext& context, Ciphertext& inp
 
     preprocess_time += total_U;
 
-    total_s = chrono::high_resolution_clock::now();
+    struct PhaseTimes {
+        uint64_t prepare_us;
+        uint64_t evaluate_us;
+    };
+    vector<PhaseTimes> times_by_partition(numcores);
+    const auto total_s = chrono::high_resolution_clock::now();
     
     vector<Ciphertext> result(sq_rt);
 
-    time_start = chrono::high_resolution_clock::now();
     int core_share = sq_rt / numcores;
     NTL_EXEC_RANGE(numcores, first, last);
     for (int c  = first; c < last; c++) {
+        PhaseTimes times{};
         for (int iter = c * core_share; iter < (c+1) * core_share; iter++) {
             for (int j = 0; j < (int) input_sqrt_list.size(); j++) {
 
-                // time_start = chrono::high_resolution_clock::now();
-                s = chrono::high_resolution_clock::now();
+                auto start = chrono::high_resolution_clock::now();
                 vector<uint64_t> U_tmp(degree);
                 for (int i = 0; i < degree; i++) {
                     int row_index = (i-iter) % (degree/2) < 0 ? (i-iter) % (degree/2) + degree/2 : (i-iter) % (degree/2);
@@ -1086,13 +1089,10 @@ Ciphertext slotToCoeff_WOPrepreocess(const SEALContext& context, Ciphertext& inp
                 Plaintext U_plain;
                 batch_encoder.encode(U_tmp, U_plain);
                 evaluator.transform_to_ntt_inplace(U_plain, input_sqrt_list[j].parms_id());
-                e = chrono::high_resolution_clock::now();
-                total_u_core += chrono::duration_cast<chrono::microseconds>(e - s).count();
+                auto end = chrono::high_resolution_clock::now();
+                times.prepare_us += chrono::duration_cast<chrono::microseconds>(end - start).count();
 
-                // time_end = chrono::high_resolution_clock::now();
-                // U_time_multi_core += chrono::duration_cast<chrono::microseconds>(time_end - time_start).count();
-
-                s = chrono::high_resolution_clock::now();
+                start = chrono::high_resolution_clock::now();
                 if (j == 0) {
                     evaluator.multiply_plain(input_sqrt_list[j], U_plain, result[iter]);
                 } else {
@@ -1100,16 +1100,24 @@ Ciphertext slotToCoeff_WOPrepreocess(const SEALContext& context, Ciphertext& inp
                     evaluator.multiply_plain(input_sqrt_list[j], U_plain, temp);
                     evaluator.add_inplace(result[iter], temp);
                 }
-                e = chrono::high_resolution_clock::now();
-                multi_total += chrono::duration_cast<chrono::microseconds>(e - s).count();
+                end = chrono::high_resolution_clock::now();
+                times.evaluate_us += chrono::duration_cast<chrono::microseconds>(end - start).count();
             }
         }
+        times_by_partition[c] = times;
     }
     NTL_EXEC_RANGE_END;
 
-    total_e = chrono::high_resolution_clock::now();
-    total += chrono::duration_cast<chrono::microseconds>(total_e - total_s).count() * multi_total / (multi_total + total_u_core);
-    preprocess_time += chrono::duration_cast<chrono::microseconds>(total_e - total_s).count() * total_u_core / (multi_total + total_u_core);
+    const auto total_e = chrono::high_resolution_clock::now();
+    PhaseTimes sums{};
+    for (const auto& times : times_by_partition) {
+        sums.prepare_us += times.prepare_us;
+        sums.evaluate_us += times.evaluate_us;
+    }
+    const auto elapsed_us = chrono::duration_cast<chrono::microseconds>(total_e - total_s).count();
+    const auto measured_us = sums.prepare_us + sums.evaluate_us;
+    total += elapsed_us * sums.evaluate_us / measured_us;
+    preprocess_time += elapsed_us * sums.prepare_us / measured_us;
 
     time_start = chrono::high_resolution_clock::now();
     for (int i = 0; i < (int) result.size(); i++) {
